@@ -1,4 +1,4 @@
-# backend/app.py
+# src/api.py
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -22,7 +22,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Define the class names for the plant disease dataset
@@ -45,12 +49,17 @@ UPLOAD_FOLDER = "uploaded_data"
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-model_path = "Model2.keras"
-Pickle_path = "Model2.pkl"
+MODEL_PATH = "Model2.keras"
+PICKLE_PATH = "Model2.pkl"
 
+# Load model and class indices at startup
 try:
-    model = load_model(model_path)
-    class_indices = load_class_indices(Pickle_path)
+    model = load_model(MODEL_PATH)
+    class_indices = load_class_indices(PICKLE_PATH)
+    # Validate that loaded class indices match the expected class_names
+    loaded_class_names = list(class_indices.keys())
+    if loaded_class_names != class_names:
+        logger.warning("Loaded class names from Model2.pkl do not match expected class_names. Using expected class_names.")
     logger.info("Model and class indices loaded successfully")
 except Exception as e:
     logger.error(f"Error loading model or class indices: {str(e)}")
@@ -58,17 +67,27 @@ except Exception as e:
 
 @app.get("/")
 def health_check():
+    """Check if the API is running."""
     return {"message": "API is running"}
 
 @app.post("/predict")
 async def predict_plant_disease(file: UploadFile = File(...)):
+    """
+    Predict the plant disease from an uploaded image.
+
+    Args:
+        file (UploadFile): Uploaded image file (JPEG or PNG).
+
+    Returns:
+        dict: Prediction result with filename and predicted disease.
+    """
     try:
         if file.content_type not in ["image/jpeg", "image/png"]:
             raise HTTPException(status_code=400, detail="Invalid file type. Please upload a JPEG or PNG image.")
         
         contents = await file.read()
         image = preprocess_image(contents)
-        prediction = predict(model, image, class_indices, class_names)  # Pass class_names to predict
+        prediction = predict(model, image, class_indices)  # Removed class_names parameter
         logger.info(f"Prediction: {prediction} for file {file.filename}")
         
         return {"filename": file.filename, "disease": prediction}
@@ -78,6 +97,15 @@ async def predict_plant_disease(file: UploadFile = File(...)):
 
 @app.post("/retrain")
 async def retrain(file: UploadFile = File(...)):
+    """
+    Retrain the model with a new dataset.
+
+    Args:
+        file (UploadFile): Uploaded ZIP file containing the new dataset.
+
+    Returns:
+        dict: Success message.
+    """
     try:
         if not file.filename.endswith('.zip'):
             raise HTTPException(status_code=400, detail="Please upload a ZIP file.")
@@ -94,6 +122,7 @@ async def retrain(file: UploadFile = File(...)):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_path)
 
+        # Handle nested folder structure
         subfolders = [d for d in os.listdir(extract_path) if os.path.isdir(os.path.join(extract_path, d))]
         if len(subfolders) == 1:
             top_level_folder = os.path.join(extract_path, subfolders[0])
@@ -106,7 +135,6 @@ async def retrain(file: UploadFile = File(...)):
         if not categories:
             raise HTTPException(status_code=400, detail="No valid categories found in the dataset.")
 
-        # Check if the categories match the expected class names
         invalid_categories = [cat for cat in categories if cat not in class_names]
         if invalid_categories:
             raise HTTPException(status_code=400, detail=f"Invalid categories found: {invalid_categories}. Expected categories: {class_names}")
@@ -118,10 +146,20 @@ async def retrain(file: UploadFile = File(...)):
 
         retrain_model(extract_path)
         global model, class_indices
-        model = load_model(model_path)
-        class_indices = load_class_indices(Pickle_path)
+        model = load_model(MODEL_PATH)
+        class_indices = load_class_indices(PICKLE_PATH)
+        # Validate class indices after retraining
+        loaded_class_names = list(class_indices.keys())
+        if loaded_class_names != class_names:
+            raise HTTPException(status_code=500, detail="Class names after retraining do not match expected class_names.")
         
         return {"message": "Model retrained successfully!"}
     except Exception as e:
         logger.error(f"Error during retraining: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
+    finally:
+        # Clean up uploaded files
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        if os.path.exists(extract_path):
+            shutil.rmtree(extract_path)

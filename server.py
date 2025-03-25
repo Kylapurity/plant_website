@@ -1,6 +1,13 @@
+# src/server.py
+"""
+Entry point for running the FastAPI application on Render.
+"""
 import os
 import uvicorn
 
+# Get the port from the environment variable (Render sets this)
+port = int(os.getenv("PORT", 8000))
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    # Run the FastAPI app defined in api.py
     uvicorn.run("api:app", host="0.0.0.0", port=port)
