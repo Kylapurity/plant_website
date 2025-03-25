@@ -14,13 +14,33 @@ import Grow from '../assets/Grow.jpg';
 import Fresh from '../assets/fresht.jpg';
 import Miller from '../assets/miller.jpg';
 import Apples from '../assets/apple.jpg';
-import Sale from '../assets/Agri.jpg'
+import Sale from '../assets/Agri.jpg';
+import Refresh from '../assets/detection.jpg';
+import Next from '../assets/womanb.jpg';
+import White1 from '../assets/white.png'
 // Import Slider from react-slick
 import Slider from "react-slick";
 import "slick-carousel/slick/slick.css";
 import "slick-carousel/slick/slick-theme.css";
 
 const HomePage = () => {
+  // Add the missing state for tracking scroll position
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const isScrolled = window.scrollY > 0;
+      if (isScrolled !== scrolled) {
+        setScrolled(isScrolled);
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, [scrolled]);
+  
   const services = [
     {
       id: 1,
@@ -96,7 +116,35 @@ const HomePage = () => {
     }
   ];
 
-  // Settings for the react-slick slider
+  // New hero slides array with three slides
+  const heroSlides = [
+    {
+      id: 1,
+      image: Next,
+      title: "Providing Nature's Finest Harvest",
+      subtitle: "Established Since 1992",
+      description: "Semper sit imperdiet bibendum felis fames ante sed suscipit tristique ultrices aptent mi sagittis.",
+      buttonText: "Discover More"
+    },
+    {
+      id: 2,
+      image: Refresh,
+      title: "Sustainable Farming Solutions",
+      subtitle: "Organic Since 1992",
+      description: "Growing the healthiest produce with respect for nature and sustainable farming practices.",
+      buttonText: "Learn More"
+    },
+    {
+      id: 3,
+      image: White1,
+      title: "AI-Powered Agriculture",
+      subtitle: "The Future of Farming",
+      description: "Leveraging cutting-edge technology to maximize yields and minimize environmental impact.",
+      buttonText: "Explore Now"
+    }
+  ];
+
+  // Settings for the react-slick slider for testimonials
   const sliderSettings = {
     dots: true,
     infinite: true,
@@ -126,22 +174,35 @@ const HomePage = () => {
     ]
   };
 
+  // Settings for the hero slider
+  const heroSliderSettings = {
+    dots: true,
+    infinite: true,
+    speed: 500,
+    slidesToShow: 1,
+    slidesToScroll: 1,
+    autoplay: true,
+    autoplaySpeed: 6000,
+    fade: true,
+    cssEase: 'linear'
+  };
+
   return (
     <div className="min-h-screen bg-white">
-      {/* Navigation */}
-       <nav className="bg-white py-4 px-10 shadow-sm">
+      {/* Navigation - Reversed the logic: now white when not scrolled, transparent when scrolled */}
+      <nav className={`fixed w-full py-4 px-10 transition-all duration-500 z-50 ${scrolled ? 'bg-green-800' : 'bg-white shadow-lg'}`}>
         <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold text-teal-700">Smart Farm</h1>
+          <h1 className={`text-xl font-bold ${scrolled ? 'text-white' : 'text-teal-700'}`}>Smart Farm</h1>
           <div className="flex space-x-10">
-            <a href="#" className="text-gray-700 hover:text-teal-700">Home</a>
-            <a href="#services" className="text-gray-700 hover:text-teal-700">Services</a>
-            <a href="#about" className="text-gray-700 hover:text-teal-700">About Us</a>
-            <a href="#blog" className="text-gray-700 hover:text-teal-700">Blog</a>
+            <a href="#" className={`hover:text-teal-700 ${scrolled ? 'text-white' : 'text-gray-700'}`}>Home</a>
+            <a href="#services" className={`hover:text-teal-700 ${scrolled ? 'text-white' : 'text-gray-700'}`}>Services</a>
+            <a href="#about" className={`hover:text-teal-700 ${scrolled ? 'text-white' : 'text-gray-700'}`}>About Us</a>
+            <a href="#blog" className={`hover:text-teal-700 ${scrolled ? 'text-white' : 'text-gray-700'}`}>Blog</a>
           </div>
           <div className="flex space-x-4">
             <Link
               to="/login"
-              className="px-4 py-2 border text-base font-medium rounded-md text-green-700 bg-white hover:bg-gray-50 shadow-md"
+              className={`px-4 py-2 border text-base font-medium rounded-md ${scrolled ? 'text-white bg-green-800 border-white' : 'text-green-700 bg-white'} hover:bg-gray-50 hover:text-green-700 shadow-md`}
             >
               Log in
             </Link>
@@ -155,29 +216,40 @@ const HomePage = () => {
         </div>
       </nav>
 
-      {/* Hero Section - Larger with an image placeholder */}
-      <section className="relative w-full py-30 flex items-center justify-center">
-        <img 
-          src={Plant}
-          alt="Hero Background" 
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <div className="container mx-auto px-4 relative z-10 text-center">
-          <h1 className="text-6xl font-bold mb-6 leading-tight text-white">
-            Smart Farming with AI Plant Detection
-          </h1>
-          <p className="text-2xl max-w-3xl mx-auto mb-10 text-white">
-            Revolutionize your farming operations with our cutting-edge plant detection and monitoring technology. Increase yields, reduce costs, and farm smarter.
-          </p>
-          <div className="flex justify-center space-x-4">
-            <Link to="/signup" className="px-8 py-3 rounded-md bg-teal-600 text-black font-medium hover:bg-teal-700">
-              Get Started
-            </Link>
-            <a href="#learn-more" className="px-8 py-3 rounded-md bg-transparent border border-white text-black font-medium hover:bg-white hover:text-teal-800">
-              Learn More
-            </a>
-          </div>
-        </div>
+      {/* Hero Section with Slider - Fixed for full visibility */}
+      <section className="relative w-full h-[600px] overflow-hidden pt-16">
+        <Slider {...heroSliderSettings} className="h-full">
+          {heroSlides.map((slide) => (
+            <div key={slide.id} className="relative h-[600px]">
+              <img 
+                src={slide.image}
+                alt={`Hero Background ${slide.id}`} 
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+              {/* Overlay to improve text readability */}
+              <div className="absolute inset-0 opacity-30" /> 
+              <div className="absolute inset-0 flex items-start pt-24">
+                <div className="container mx-auto px-6 md:px-12 text-left">
+                  <div className="max-w-xl">
+                    <div className="flex items-center mb-4">
+                      <span className="text-green-400 mr-2">🌱</span>
+                      <p className="text-green-400 font-medium">{slide.subtitle}</p>
+                    </div>
+                    <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-4 leading-tight text-white">
+                      {slide.title}
+                    </h1>
+                    <p className="text-base md:text-lg mb-6 text-gray-200">
+                      {slide.description}
+                    </p>
+                    <a href="#learn-more" className="px-6 py-3 rounded-md bg-green-800 text-white font-medium hover:bg-green-700 inline-block">
+                      {slide.buttonText}
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </Slider>
       </section>
       
       {/* About Section */}

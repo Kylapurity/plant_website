@@ -1,5 +1,8 @@
-import React, { useState, useContext, useRef } from 'react';
+import React, { useState, useContext, useRef, useEffect } from 'react';
 import { AuthContext } from '../AuthContext';
+import { Bar } from 'react-chartjs-2';
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
 
 // Mock data for plant disease trends
 const trendData = [
@@ -12,38 +15,7 @@ const trendData = [
 
 // Helper function to get recommendations based on disease name
 const getRecommendations = (diseaseName) => {
-  // Default recommendations
-  const defaultRecommendations = [
-    'Remove and destroy infected leaves',
-    'Ensure proper air circulation around plants',
-    'Avoid overhead watering'
-  ];
-  
-  // Disease-specific recommendations
-  const diseaseRecommendations = {
-    'Apple___Apple_scab': [
-      'Remove and destroy fallen leaves',
-      'Apply fungicide during the growing season',
-      'Prune trees to improve air circulation',
-      'Consider resistant apple varieties for future plantings'
-    ],
-    'Tomato___Early_blight': [
-      'Remove and destroy infected leaves',
-      'Apply copper-based fungicide',
-      'Mulch around plants to prevent soil splash',
-      'Rotate crops and avoid planting tomatoes in the same spot'
-    ],
-    'Grape___Black_rot': [
-      'Remove mummified berries and infected leaves',
-      'Apply fungicide before bloom and after',
-      'Ensure good canopy management and air circulation',
-      'Use appropriate fungicide rotation to prevent resistance'
-    ],
-    // Add more disease-specific recommendations as needed
-  };
-  
-  // Return disease-specific recommendations if available, otherwise default
-  return diseaseRecommendations[diseaseName] || defaultRecommendations;
+  // ... (keep your existing getRecommendations function)
 };
 
 const Dashboard = () => {
@@ -53,42 +25,48 @@ const Dashboard = () => {
   const [previewUrl, setPreviewUrl] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
-  // Dynamic history state instead of mock data
   const [scanHistory, setScanHistory] = useState([]);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
   const [error, setError] = useState(null);
+  const [trainingFiles, setTrainingFiles] = useState([]);
+  const [trainingClass, setTrainingClass] = useState('');
+  const [isRetraining, setIsRetraining] = useState(false);
+  const [visualizationData, setVisualizationData] = useState(null);
   const fileInputRef = useRef(null);
+  const trainingFileInputRef = useRef(null);
+
+  // Load visualization data
+  useEffect(() => {
+    // Mock data - replace with API call in production
+    setVisualizationData({
+      classDistribution: {
+        labels: ['Healthy', 'Leaf Blight', 'Powdery Mildew', 'Bacterial Spot', 'Rust'],
+        data: [1200, 850, 620, 430, 290],
+      }
+    });
+  }, []);
 
   const getTrendIcon = (trend) => {
     switch (trend) {
-      case 'increasing':
-        return '↑';
-      case 'decreasing':
-        return '↓';
-      default:
-        return '→';
+      case 'increasing': return '↑';
+      case 'decreasing': return '↓';
+      default: return '→';
     }
   };
 
   const getTrendColor = (trend) => {
     switch (trend) {
-      case 'increasing':
-        return 'text-red-500';
-      case 'decreasing':
-        return 'text-green-500';
-      default:
-        return 'text-yellow-500';
+      case 'increasing': return 'text-red-500';
+      case 'decreasing': return 'text-green-500';
+      default: return 'text-yellow-500';
     }
   };
 
   const getSeverityColor = (severity) => {
     switch (severity) {
-      case 'high':
-        return 'bg-red-100 text-red-800';
-      case 'medium':
-        return 'bg-yellow-100 text-yellow-800';
-      default:
-        return 'bg-green-100 text-green-800';
+      case 'high': return 'bg-red-100 text-red-800';
+      case 'medium': return 'bg-yellow-100 text-yellow-800';
+      default: return 'bg-green-100 text-green-800';
     }
   };
 
@@ -97,8 +75,8 @@ const Dashboard = () => {
     if (file) {
       setSelectedImage(file);
       setPreviewUrl(URL.createObjectURL(file));
-      setAnalysisResult(null); // Clear previous results
-      setError(null); // Clear any previous errors
+      setAnalysisResult(null);
+      setError(null);
     }
   };
 
@@ -107,52 +85,38 @@ const Dashboard = () => {
 
     setIsAnalyzing(true);
     setError(null);
-    
+
     try {
-      // Create FormData to send the image
       const formData = new FormData();
       formData.append('file', selectedImage);
-      
-      // Call the FastAPI backend
-      const response = await fetch('http://localhost:8000/predict', {
+
+      const response = await fetch('https://plant-website-735w.onrender.com/predict', {
         method: 'POST',
         body: formData,
       });
-      
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-      
+
+      if (!response.ok) throw new Error(`Error: ${response.status}`);
+
       const data = await response.json();
-      
-      // Format the disease name for display (remove underscores and class prefixes)
       const rawDiseaseName = data.prediction;
       let displayDiseaseName = rawDiseaseName;
-      
-      // Remove plant name prefix and underscores for display
+
       if (rawDiseaseName.includes('___')) {
         const parts = rawDiseaseName.split('___');
         displayDiseaseName = parts[1].replace(/_/g, ' ');
-        
-        // Handle 'healthy' case
         if (displayDiseaseName === 'healthy') {
           displayDiseaseName = 'Healthy - No Disease Detected';
         }
       }
-      
-      // Get confidence (this would come from your model in the real implementation)
-      // For now, we'll use a random value between 85-99
+
       const confidence = Math.floor(Math.random() * 15) + 85;
-      
-      // Create result object
-      const result = {
+
+      setAnalysisResult({
         disease: displayDiseaseName,
-        rawDiseaseName: rawDiseaseName, // Keep the original for reference
+        rawDiseaseName: rawDiseaseName,
         confidence: confidence,
         recommendations: getRecommendations(rawDiseaseName)
-      };
-      
-      setAnalysisResult(result);
+      });
     } catch (err) {
       console.error('Error during disease prediction:', err);
       setError('Failed to analyze the image. Please try again.');
@@ -164,9 +128,8 @@ const Dashboard = () => {
   const handleSaveToHistory = () => {
     if (!analysisResult || !previewUrl) return;
 
-    // Create a new history item
     const newHistoryItem = {
-      id: Date.now(), // Use timestamp as ID
+      id: Date.now(),
       imageUrl: previewUrl,
       date: new Date().toISOString().split('T')[0],
       disease: analysisResult.disease,
@@ -175,26 +138,58 @@ const Dashboard = () => {
       recommendations: analysisResult.recommendations
     };
 
-    // Add to history (add at beginning of array)
     setScanHistory([newHistoryItem, ...scanHistory]);
-    
-    // Show confirmation message
     alert('Scan saved to your history!');
-    
-    // Clear the current analysis
     setSelectedImage(null);
     setPreviewUrl('');
     setAnalysisResult(null);
   };
 
-  const viewHistoryDetails = (item) => {
-    setSelectedHistoryItem(item);
+  const handleTrainingFileChange = (e) => {
+    setTrainingFiles([...e.target.files]);
   };
 
-  const closeHistoryDetails = () => {
-    setSelectedHistoryItem(null);
+  const handleRetrainSubmit = async (e) => {
+    e.preventDefault();
+    if (!trainingFiles.length || !trainingClass) {
+      alert('Please select files and specify a class');
+      return;
+    }
+
+    setIsRetraining(true);
+    
+    try {
+      const formData = new FormData();
+      trainingFiles.forEach(file => formData.append('files', file));
+      formData.append('class_name', trainingClass);
+
+      // Upload training data
+      const uploadResponse = await fetch('http://localhost:8000/upload-training-data', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) throw new Error('Upload failed');
+
+      // Trigger retraining
+      const retrainResponse = await fetch('http://localhost:8000/retrain', {
+        method: 'POST',
+      });
+
+      if (!retrainResponse.ok) throw new Error('Retraining failed');
+
+      alert('Retraining started successfully!');
+      setTrainingFiles([]);
+      setTrainingClass('');
+    } catch (err) {
+      alert('Retraining failed: ' + err.message);
+    } finally {
+      setIsRetraining(false);
+    }
   };
 
+  const viewHistoryDetails = (item) => setSelectedHistoryItem(item);
+  const closeHistoryDetails = () => setSelectedHistoryItem(null);
   const handleNewScan = () => {
     setSelectedImage(null);
     setPreviewUrl('');
@@ -202,6 +197,14 @@ const Dashboard = () => {
     setError(null);
     setActiveTab('upload');
   };
+
+  const navTabs = [
+    { id: 'trends', label: 'Disease Trends' },
+    { id: 'upload', label: 'Upload Image' },
+    { id: 'history', label: 'My History' },
+    { id: 'retrain', label: 'Retrain Model' },
+    { id: 'visualizations', label: 'Data Insights' }
+  ];
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -217,7 +220,7 @@ const Dashboard = () => {
               <span className="mr-4 text-gray-600">Hello, {currentUser.name}</span>
               <button
                 onClick={logout}
-                className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+                className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded"
               >
                 Logout
               </button>
@@ -230,42 +233,20 @@ const Dashboard = () => {
         <div className="px-4 py-6 sm:px-0">
           <div className="mb-4 border-b border-gray-200">
             <ul className="flex flex-wrap -mb-px">
-              <li className="mr-2">
-                <button
-                  className={`inline-block py-4 px-4 text-sm font-medium ${
-                    activeTab === 'trends'
-                      ? 'text-green-600 border-b-2 border-green-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                  onClick={() => setActiveTab('trends')}
-                >
-                  Disease Trends
-                </button>
-              </li>
-              <li className="mr-2">
-                <button
-                  className={`inline-block py-4 px-4 text-sm font-medium ${
-                    activeTab === 'upload'
-                      ? 'text-green-600 border-b-2 border-green-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                  onClick={() => setActiveTab('upload')}
-                >
-                  Upload Image and Predict Disease
-                </button>
-              </li>
-              <li className="mr-2">
-                <button
-                  className={`inline-block py-4 px-4 text-sm font-medium ${
-                    activeTab === 'history'
-                      ? 'text-green-600 border-b-2 border-green-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                  onClick={() => setActiveTab('history')}
-                >
-                  My History
-                </button>
-              </li>
+              {navTabs.map(tab => (
+                <li key={tab.id} className="mr-2">
+                  <button
+                    className={`inline-block py-4 px-4 text-sm font-medium ${
+                      activeTab === tab.id
+                        ? 'text-green-600 border-b-2 border-green-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                </li>
+              ))}
             </ul>
           </div>
 
@@ -276,52 +257,22 @@ const Dashboard = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                      >
-                        Disease
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                      >
-                        Occurrences
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                      >
-                        Trend
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                      >
-                        Severity
-                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Disease</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Occurrences</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trend</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {trendData.map((item) => (
                       <tr key={item.id}>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">{item.disease}</div>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.disease}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.occurrences}</td>
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm ${getTrendColor(item.trend)}`}>
+                          {item.trend} {getTrendIcon(item.trend)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-500">{item.occurrences}</div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className={`text-sm ${getTrendColor(item.trend)}`}>
-                            {item.trend} {getTrendIcon(item.trend)}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSeverityColor(
-                              item.severity
-                            )}`}
-                          >
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSeverityColor(item.severity)}`}>
                             {item.severity}
                           </span>
                         </td>
@@ -337,130 +288,93 @@ const Dashboard = () => {
             <div>
               <h2 className="text-2xl font-bold mb-4">Upload Plant Image for Disease Detection</h2>
               <div className="bg-white shadow overflow-hidden sm:rounded-lg p-6">
-                <div className="mb-6">
-                  <p className="text-gray-600 mb-4">
-                    Upload a clear image of the plant leaf or affected area. Our AI will analyze it and identify any
-                    potential diseases.
-                  </p>
-                  
-                  {!previewUrl ? (
-                    <div className="flex flex-col items-center">
-                      <div className="flex items-center justify-center w-full mb-4">
-                        <label
-                          htmlFor="dropzone-file"
-                          className="flex flex-col items-center justify-center w-full h-64 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100"
-                        >
-                          <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                            <svg
-                              className="w-10 h-10 mb-3 text-gray-400"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                              xmlns="http://www.w3.org/2000/svg"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth="2"
-                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                              ></path>
-                            </svg>
-                            <p className="mb-2 text-sm text-gray-500">
-                              <span className="font-semibold">Click to upload</span> or drag and drop
-                            </p>
-                            <p className="text-xs text-gray-500">PNG, JPG, or JPEG (MAX. 10MB)</p>
-                          </div>
-                          <input 
-                            id="dropzone-file" 
-                            type="file" 
-                            className="hidden" 
-                            accept="image/*"
-                            ref={fileInputRef}
-                            onChange={handleImageChange}
-                          />
-                        </label>
-                      </div>
-                      
-                      {/* New Predict Button */}
+                {!previewUrl ? (
+                  <div className="flex flex-col items-center">
+                    <div className="flex items-center justify-center w-full mb-4">
+                      <label className="flex flex-col items-center justify-center w-full h-64 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                        <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                          <svg className="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                          </svg>
+                          <p className="mb-2 text-sm text-gray-500">
+                            <span className="font-semibold">Click to upload</span> or drag and drop
+                          </p>
+                          <p className="text-xs text-gray-500">PNG, JPG, or JPEG (MAX. 10MB)</p>
+                        </div>
+                        <input
+                          id="dropzone-file"
+                          type="file"
+                          className="hidden"
+                          accept="image/*"
+                          ref={fileInputRef}
+                          onChange={handleImageChange}
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded"
+                      onClick={() => {
+                        if (!selectedImage) {
+                          alert("Please upload an image first");
+                          fileInputRef.current.click();
+                        } else {
+                          handleAnalyzeClick();
+                        }
+                      }}
+                    >
+                      Predict Plant Disease
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <div className="relative mb-4 w-full max-w-lg">
+                      <img
+                        src={previewUrl}
+                        alt="Plant preview"
+                        className="rounded-lg shadow-md object-contain max-h-64 mx-auto"
+                      />
                       <button
-                        type="button"
-                        className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
                         onClick={() => {
-                          // If no image is selected, prompt to select one
-                          if (!selectedImage) {
-                            alert("Please upload an image first");
-                            fileInputRef.current.click();
-                          } else {
-                            handleAnalyzeClick();
-                          }
+                          setSelectedImage(null);
+                          setPreviewUrl('');
+                          setAnalysisResult(null);
+                          setError(null);
                         }}
+                        className="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white rounded-full p-1"
                       >
-                        Predict Plant Disease
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
                       </button>
                     </div>
-                  ) : (
-                    <div className="flex flex-col items-center">
-                      <div className="relative mb-4 w-full max-w-lg">
-                        <img 
-                          src={previewUrl} 
-                          alt="Plant preview" 
-                          className="rounded-lg shadow-md object-contain max-h-64 mx-auto"
-                        />
-                        <button
-                          onClick={() => {
-                            setSelectedImage(null);
-                            setPreviewUrl('');
-                            setAnalysisResult(null);
-                            setError(null);
-                          }}
-                          className="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white rounded-full p-1"
-                        >
-                          <svg 
-                            className="w-5 h-5" 
-                            fill="none" 
-                            stroke="currentColor" 
-                            viewBox="0 0 24 24" 
-                            xmlns="http://www.w3.org/2000/svg"
-                          >
-                            <path 
-                              strokeLinecap="round" 
-                              strokeLinejoin="round" 
-                              strokeWidth="2" 
-                              d="M6 18L18 6M6 6l12 12"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      
-                      {!analysisResult && !error && (
+
+                    {!analysisResult && !error && (
+                      <button
+                        type="button"
+                        className={`bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded ${isAnalyzing ? 'opacity-75 cursor-not-allowed' : ''}`}
+                        onClick={handleAnalyzeClick}
+                        disabled={isAnalyzing}
+                      >
+                        {isAnalyzing ? 'Analyzing...' : 'Predict Disease'}
+                      </button>
+                    )}
+
+                    {error && (
+                      <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">
+                        {error}
                         <button
                           type="button"
-                          className={`bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline ${
-                            isAnalyzing ? 'opacity-75 cursor-not-allowed' : ''
-                          }`}
-                          onClick={handleAnalyzeClick}
-                          disabled={isAnalyzing}
+                          className="ml-4 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-4 rounded"
+                          onClick={() => setError(null)}
                         >
-                          {isAnalyzing ? 'Analyzing...' : 'Predict Disease'}
+                          Try Again
                         </button>
-                      )}
-                      
-                      {error && (
-                        <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg">
-                          {error}
-                          <button
-                            type="button"
-                            className="ml-4 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-4 rounded focus:outline-none focus:shadow-outline"
-                            onClick={() => setError(null)}
-                          >
-                            Try Again
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {analysisResult && (
                   <div className="mt-8 border-t pt-6">
                     <h3 className="text-xl font-bold mb-4">Analysis Results</h3>
@@ -483,18 +397,18 @@ const Dashboard = () => {
                           ))}
                         </ul>
                       </div>
-                      
+
                       <div className="flex justify-center space-x-4">
                         <button
                           type="button"
-                          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
+                          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded"
                           onClick={handleSaveToHistory}
                         >
                           Save to History
                         </button>
                         <button
                           type="button"
-                          className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
+                          className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded"
                           onClick={() => {
                             setSelectedImage(null);
                             setPreviewUrl('');
@@ -522,7 +436,7 @@ const Dashboard = () => {
                     <div className="flex justify-center">
                       <button
                         type="button"
-                        className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
+                        className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded"
                         onClick={handleNewScan}
                       >
                         Upload and Predict
@@ -535,39 +449,25 @@ const Dashboard = () => {
                       <div className="bg-white p-4 rounded-lg">
                         <div className="flex justify-between items-start mb-4">
                           <h3 className="text-xl font-bold">{selectedHistoryItem.disease}</h3>
-                          <button
-                            onClick={closeHistoryDetails}
-                            className="text-gray-500 hover:text-gray-700"
-                          >
-                            <svg 
-                              className="w-6 h-6" 
-                              fill="none" 
-                              stroke="currentColor" 
-                              viewBox="0 0 24 24" 
-                              xmlns="http://www.w3.org/2000/svg"
-                            >
-                              <path 
-                                strokeLinecap="round" 
-                                strokeLinejoin="round" 
-                                strokeWidth="2" 
-                                d="M6 18L18 6M6 6l12 12"
-                              />
+                          <button onClick={closeHistoryDetails} className="text-gray-500 hover:text-gray-700">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
                             </svg>
                           </button>
                         </div>
-                        
+
                         <div className="flex flex-col md:flex-row md:space-x-6">
                           <div className="md:w-1/3 mb-4 md:mb-0">
-                            <img 
-                              src={selectedHistoryItem.imageUrl} 
-                              alt={selectedHistoryItem.disease} 
+                            <img
+                              src={selectedHistoryItem.imageUrl}
+                              alt={selectedHistoryItem.disease}
                               className="rounded-lg shadow-md w-full h-auto"
                             />
                             <p className="text-gray-500 mt-2 text-sm">
                               Scanned on {selectedHistoryItem.date}
                             </p>
                           </div>
-                          
+
                           <div className="md:w-2/3">
                             <div className="mb-4">
                               <span className="font-semibold">Confidence:</span>{' '}
@@ -583,11 +483,11 @@ const Dashboard = () => {
                             </div>
                           </div>
                         </div>
-                        
+
                         <div className="mt-6 flex justify-center">
                           <button
                             type="button"
-                            className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
+                            className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded"
                             onClick={handleNewScan}
                           >
                             Scan New Plant
@@ -598,15 +498,15 @@ const Dashboard = () => {
                       <div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {scanHistory.map((item) => (
-                            <div 
-                              key={item.id} 
+                            <div
+                              key={item.id}
                               className="bg-white overflow-hidden shadow-md rounded-lg hover:shadow-lg transition-shadow cursor-pointer"
                               onClick={() => viewHistoryDetails(item)}
                             >
                               <div className="relative h-48 bg-gray-200">
-                                <img 
-                                  src={item.imageUrl} 
-                                  alt={item.disease} 
+                                <img
+                                  src={item.imageUrl}
+                                  alt={item.disease}
                                   className="w-full h-full object-cover"
                                 />
                               </div>
@@ -620,11 +520,11 @@ const Dashboard = () => {
                             </div>
                           ))}
                         </div>
-                        
+
                         <div className="mt-6 flex justify-center">
                           <button
                             type="button"
-                            className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded focus:outline-none focus:shadow-outline"
+                            className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-6 rounded"
                             onClick={handleNewScan}
                           >
                             Scan New Plant
@@ -634,6 +534,85 @@ const Dashboard = () => {
                     )}
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'retrain' && (
+            <div>
+              <h2 className="text-2xl font-bold mb-4">Retrain Model with New Data</h2>
+              <div className="bg-white shadow overflow-hidden sm:rounded-lg p-6">
+                <form onSubmit={handleRetrainSubmit}>
+                  <div className="mb-4">
+                    <label className="block text-gray-700 mb-2">Plant Class/Disease Name</label>
+                    <input
+                      type="text"
+                      value={trainingClass}
+                      onChange={(e) => setTrainingClass(e.target.value)}
+                      className="w-full p-2 border rounded"
+                      required
+                    />
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-gray-700 mb-2">Upload Training Images</label>
+                    <input
+                      type="file"
+                      ref={trainingFileInputRef}
+                      onChange={handleTrainingFileChange}
+                      multiple
+                      className="w-full p-2 border rounded"
+                      required
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isRetraining}
+                    className={`bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded ${isRetraining ? 'opacity-75 cursor-not-allowed' : ''}`}
+                  >
+                    {isRetraining ? 'Retraining...' : 'Start Retraining'}
+                  </button>
+                  {trainingFiles.length > 0 && (
+                    <p className="mt-2 text-sm text-gray-600">
+                      {trainingFiles.length} files selected for {trainingClass || 'new class'}
+                    </p>
+                  )}
+                </form>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'visualizations' && visualizationData && (
+            <div>
+              <h2 className="text-2xl font-bold mb-4">Plant Disease Data Insights</h2>
+              <div className="bg-white shadow overflow-hidden sm:rounded-lg p-6">
+                <h3 className="text-lg font-semibold mb-4">Class Distribution in Training Data</h3>
+                <div className="h-96">
+                  <Bar
+                    data={{
+                      labels: visualizationData.classDistribution.labels,
+                      datasets: [{
+                        label: 'Number of Samples',
+                        data: visualizationData.classDistribution.data,
+                        backgroundColor: '#4ade80',
+                        borderColor: '#16a34a',
+                        borderWidth: 1
+                      }]
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      scales: {
+                        y: {
+                          beginAtZero: true
+                        }
+                      }
+                    }}
+                  />
+                </div>
+                <p className="mt-4 text-gray-600">
+                  This visualization shows the distribution of different disease classes in our training dataset.
+                  A balanced dataset helps improve model accuracy across all disease types.
+                </p>
               </div>
             </div>
           )}
