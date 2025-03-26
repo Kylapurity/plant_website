@@ -1,36 +1,25 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import os
-import uvicorn
-from dotenv import load_dotenv
-import shutil
-import zipfile
-import logging
-from prediction import load_model, preprocess_image, predict, load_class_indices
-from model import retrain_model
+import numpy as np
+from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
+from src.preprocessing import preprocess_image, preprocess_dataset
+from src.model import load_model, retrain_model, load_class_indices
+from src.prediction import predict_image
+import matplotlib.pyplot as plt
+import seaborn as sns
+import io
+import base64
 
-app = FastAPI(
-    title="Plant Disease API",
-    description="API for plant disease classification and retraining.",
-    version="1.0.0",
-)
+app = Flask(__name__)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Update with your frontend URL in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configuration
+UPLOAD_FOLDER = "uploaded_data"
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+MODEL_PATH = "../models/Model1.keras"
+PICKLE_PATH = "../models/Model1.pkl"
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Define the class names for the plant disease dataset
+# Define class names explicitly
 class_names = [
     'Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy',
     'Blueberry___healthy', 'Cherry_(including_sour)___Powdery_mildew', 'Cherry_(including_sour)___healthy',
@@ -46,127 +35,116 @@ class_names = [
     'Tomato___Tomato_mosaic_virus', 'Tomato___healthy'
 ]
 
-UPLOAD_FOLDER = "uploaded_data"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# Load models globally
+model = load_model(MODEL_PATH)
+class_indices = load_class_indices(PICKLE_PATH)
 
-MODEL_PATH = "../models/Model1.keras"
-PICKLE_PATH = "../models/Model1.pkl"
+# Validate that class_indices match class_names
+if list(class_indices.keys()) != class_names:
+    raise ValueError("Class names in pickle file do not match defined class_names")
 
-# Load model and class indices at startup
-try:
-    model = load_model(MODEL_PATH)
-    class_indices = load_class_indices(PICKLE_PATH)
-    # Validate that loaded class indices match the expected class_names
-    loaded_class_names = list(class_indices.keys())
-    if loaded_class_names != class_names:
-        logger.warning("Loaded class names from Model2.pkl do not match expected class_names. Using expected class_names.")
-    logger.info("Model and class indices loaded successfully")
-except Exception as e:
-    logger.error(f"Error loading model or class indices: {str(e)}")
-    raise RuntimeError("Failed to load model or class indices")
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.get("/")
-def health_check():
-    """Check if the API is running."""
-    return {"message": "API is running"}
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-@app.post("/predict")
-async def predict_plant_disease(file: UploadFile = File(...)):
-    """
-    Predict the plant disease from an uploaded image.
+# Model Prediction Endpoint
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        predicted_class, confidence = predict_image(filepath)
+        return jsonify({
+            'prediction': predicted_class,
+            'confidence': confidence
+        })
+    return jsonify({'error': 'Invalid file format'}), 400
 
-    Args:
-        file (UploadFile): Uploaded image file (JPEG or PNG).
+# Upload Data for Retraining
+@app.route('/upload', methods=['POST'])
+def upload_data():
+    if 'files[]' not in request.files:
+        return jsonify({'error': 'No files uploaded'}), 400
+    files = request.files.getlist('files[]')
+    for file in files:
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+    return jsonify({'message': f'{len(files)} files uploaded successfully'})
 
-    Returns:
-        dict: Prediction result with filename and predicted disease.
-    """
+# Trigger Retraining with Metrics
+@app.route('/retrain', methods=['POST'])
+def retrain():
     try:
-        if file.content_type not in ["image/jpeg", "image/png"]:
-            raise HTTPException(status_code=400, detail="Invalid file type. Please upload a JPEG or PNG image.")
-        
-        contents = await file.read()
-        image = preprocess_image(contents)
-        prediction = predict(model, image, class_indices)  # Removed class_names parameter
-        logger.info(f"Prediction: {prediction} for file {file.filename}")
-        
-        return {"filename": file.filename, "disease": prediction}
+        metrics = retrain_model(model, UPLOAD_FOLDER)
+        model.save(MODEL_PATH)
+        return jsonify({
+            'message': 'Model retrained successfully',
+            'metrics': metrics
+        })
     except Exception as e:
-        logger.error(f"Error during prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
-@app.post("/retrain")
-async def retrain(file: UploadFile = File(...)):
-    """
-    Retrain the model with a new dataset.
+# Visualizations
+@app.route('/visualize', methods=['GET'])
+def visualize():
+    # Placeholder data (replace with actual dataset analysis)
+    sample_data = np.random.rand(100, len(class_names))
+    predictions = np.argmax(sample_data, axis=1)
+    
+    # Feature 1: Class Distribution
+    plt.figure(figsize=(12, 6))
+    sns.countplot(x=predictions)
+    plt.xticks(ticks=range(len(class_names)), labels=class_names, rotation=90)
+    plt.title('Distribution of Predicted Classes')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    class_dist_img = base64.b64encode(buf.getvalue()).decode('utf-8')
+    plt.close()
 
-    Args:
-        file (UploadFile): Uploaded ZIP file containing the new dataset.
+    # Feature 2: Confidence Scores
+    confidence_scores = np.max(sample_data, axis=1)
+    plt.figure(figsize=(10, 6))
+    sns.histplot(confidence_scores, bins=20)
+    plt.title('Distribution of Confidence Scores')
+    plt.xlabel('Confidence')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    confidence_img = base64.b64encode(buf.getvalue()).decode('utf-8')
+    plt.close()
 
-    Returns:
-        dict: Success message.
-    """
-    try:
-        if not file.filename.endswith('.zip'):
-            raise HTTPException(status_code=400, detail="Please upload a ZIP file.")
+    # Feature 3: Healthy vs Diseased
+    healthy_count = np.sum([1 for p in predictions if 'healthy' in class_names[p]])
+    diseased_count = len(predictions) - healthy_count
+    plt.figure(figsize=(6, 6))
+    plt.pie([healthy_count, diseased_count], labels=['Healthy', 'Diseased'], autopct='%1.1f%%')
+    plt.title('Healthy vs Diseased Plants')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    health_img = base64.b64encode(buf.getvalue()).decode('utf-8')
+    plt.close()
 
-        zip_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(zip_path, 'wb') as f:
-            f.write(await file.read())
+    return jsonify({
+        'class_distribution': class_dist_img,
+        'confidence_scores': confidence_img,
+        'health_status': health_img
+    })
 
-        extract_path = os.path.join(UPLOAD_FOLDER, 'dataset')
-        if os.path.exists(extract_path):
-            shutil.rmtree(extract_path)
-        os.makedirs(extract_path)
-
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_path)
-
-        # Handle nested folder structure
-        subfolders = [d for d in os.listdir(extract_path) if os.path.isdir(os.path.join(extract_path, d))]
-        if len(subfolders) == 1:
-            top_level_folder = os.path.join(extract_path, subfolders[0])
-            for item in os.listdir(top_level_folder):
-                shutil.move(os.path.join(top_level_folder, item), extract_path)
-            shutil.rmtree(top_level_folder)
-
-        # Validate the new dataset against the expected class names
-        categories = [d for d in os.listdir(extract_path) if os.path.isdir(os.path.join(extract_path, d))]
-        if not categories:
-            raise HTTPException(status_code=400, detail="No valid categories found in the dataset.")
-
-        invalid_categories = [cat for cat in categories if cat not in class_names]
-        if invalid_categories:
-            raise HTTPException(status_code=400, detail=f"Invalid categories found: {invalid_categories}. Expected categories: {class_names}")
-
-        for category in categories:
-            category_path = os.path.join(extract_path, category)
-            if not os.listdir(category_path):
-                raise HTTPException(status_code=400, detail=f"Category '{category}' is empty.")
-
-        retrain_model(extract_path)
-        global model, class_indices
-        model = load_model(MODEL_PATH)
-        class_indices = load_class_indices(PICKLE_PATH)
-        # Validate class indices after retraining
-        loaded_class_names = list(class_indices.keys())
-        if loaded_class_names != class_names:
-            raise HTTPException(status_code=500, detail="Class names after retraining do not match expected class_names.")
-        
-        return {"message": "Model retrained successfully!"}
-    except Exception as e:
-        logger.error(f"Error during retraining: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
-    finally:
-        # Clean up uploaded files
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-        if os.path.exists(extract_path):
-            shutil.rmtree(extract_path)
-# Get the port from the environment variable (Render sets this)
-port = int(os.getenv("PORT", 8000))
-
-if __name__ == "__main__":
-    # Run the FastAPI app defined in api.py
-    uvicorn.run("api:app", host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
+    app.run(host='0.0.0.0', port=5000)
