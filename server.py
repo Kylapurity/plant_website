@@ -1,8 +1,3 @@
-# src/server.py
-"""
-Entry point for running the FastAPI application on Render.
-"""
-
 import os
 import uvicorn
 
