@@ -14,7 +14,6 @@ import uvicorn
 from datetime import datetime
 import logging
 import shutil
-import pickle
 
 # ================== INITIAL SETUP ================== #
 # Disable GPU and suppress TensorFlow logs
@@ -37,7 +36,7 @@ sys.path.append(os.path.join(current_dir, '..'))
 UPLOAD_FOLDER = os.path.join(current_dir, "uploaded_data")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 MODEL_DIR = os.path.join(current_dir, "models")
-PICKLE_PATH = os.path.join(MODEL_DIR, "Model1.pkl")
+KERAS_PATH = os.path.join(MODEL_DIR, "Model1.keras")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 # Ensure directories exist
@@ -51,8 +50,8 @@ for root, dirs, files in os.walk(current_dir):
     logger.info("%s has files: %s and dirs: %s", root, files, dirs)
 
 app = FastAPI(title="Plant Disease Classifier API",
-              description="API for classifying plant diseases from leaf images",
-              version="1.0.0")
+             description="API for classifying plant diseases from leaf images",
+             version="1.0.0")
 
 # ================== CORS CONFIGURATION ================== #
 app.add_middleware(
@@ -85,27 +84,27 @@ try:
     from src.model import load_model, retrain_model
     from src.prediction import predict_image
     
-    logger.info("Attempting to load model from: %s", PICKLE_PATH)
+    logger.info("Attempting to load model from: %s", KERAS_PATH)
     
-    # Verify model file exists with better error reporting
-    if not os.path.exists(PICKLE_PATH):
+    # Verify model files exist with better error reporting
+    if not os.path.exists(KERAS_PATH):
         available_files = "\n".join(os.listdir(MODEL_DIR)) if os.path.exists(MODEL_DIR) else "Directory does not exist"
         raise FileNotFoundError(
-            f"Model file not found at {PICKLE_PATH}\n"
+            f"Model file not found at {KERAS_PATH}\n"
             f"Available files in models directory:\n{available_files}"
         )
-
+    
     logger.info("Model file found, proceeding with loading...")
     
     # Load with progress indication
-    logger.info("Loading model from pickle file...")
-    model = load_model(PICKLE_PATH)
+    logger.info("Loading Keras model...")
+    model = load_model(KERAS_PATH)
     
     logger.info("Model loaded successfully with %d classes", len(CLASS_NAMES))
     
     # Test model prediction
     logger.info("Running test prediction to verify model...")
-    test_input = np.zeros((1, 128, 128, 3))  # Match the input shape expected by your model (IMG_SIZE = (128, 128))
+    test_input = np.zeros((1, 128, 128, 3))  # Match IMG_SIZE from preprocessing.py
     prediction = model.predict(test_input)
     logger.info("Test prediction successful, output shape: %s", prediction.shape)
     
@@ -121,7 +120,7 @@ except Exception as e:
     raise RuntimeError(
         f"Model initialization failed: {str(e)}\n"
         f"Current directory: {os.getcwd()}\n"
-        f"Looking for model at: {PICKLE_PATH}"
+        f"Looking for model at: {KERAS_PATH}"
     )
 
 # ================== HELPER FUNCTIONS ================== #
@@ -270,12 +269,11 @@ async def retrain():
         
         metrics = retrain_model(model, UPLOAD_FOLDER)
         
-        # Save the updated model to Model1.pkl
+        # Save the updated model
         logger.info("Saving retrained model...")
-        backup_path = os.path.join(MODEL_DIR, f"Model1_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl")
-        shutil.copyfile(PICKLE_PATH, backup_path)
-        with open(PICKLE_PATH, "wb") as f:
-            pickle.dump(model, f)
+        backup_path = os.path.join(MODEL_DIR, f"Model1_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.keras")
+        shutil.copyfile(KERAS_PATH, backup_path)
+        model.save(KERAS_PATH)
         
         logger.info("Model retrained and saved successfully")
         return {
@@ -390,9 +388,9 @@ async def debug_files():
         "models_dir": list_files('models'),
         "upload_dir": list_files(UPLOAD_FOLDER),
         "abs_paths": {
-            "pickle": PICKLE_PATH,
+            "keras": KERAS_PATH,
             "exists": {
-                "pickle": os.path.exists(PICKLE_PATH)
+                "keras": os.path.exists(KERAS_PATH)
             }
         }
     }
