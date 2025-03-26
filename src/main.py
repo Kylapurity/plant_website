@@ -1,26 +1,36 @@
 import os
 import sys
 import numpy as np
-
-# Add the parent directory of 'src' to sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from flask import Flask, request, jsonify, render_template
-from werkzeug.utils import secure_filename
-from src.preprocessing import preprocess_image, preprocess_dataset
-from src.model import load_model, retrain_model, load_class_indices
-from src.prediction import predict_image
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 import base64
+from typing import List
 
-app = Flask(__name__)
+# Add the parent directory of 'src' to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.preprocessing import preprocess_image, preprocess_dataset
+from src.model import load_model, retrain_model, load_class_indices
+from src.prediction import predict_image
+
+app = FastAPI()
+
+# Enable CORS to allow the React frontend to communicate with the backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this in production to your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration
 UPLOAD_FOLDER = "uploaded_data"
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 MODEL_PATH = "../models/Model1.keras"
 PICKLE_PATH = "../models/Model1.pkl"
 
@@ -48,62 +58,60 @@ class_indices = load_class_indices(PICKLE_PATH)
 if list(class_indices.keys()) != class_names:
     raise ValueError("Class names in pickle file do not match defined class_names")
 
-def allowed_file(filename):
+def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Plant Disease Classifier API"}
 
 # Model Prediction Endpoint
-@app.route('/predict', methods=['POST'])
-def predict():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        
-        predicted_class, confidence = predict_image(filepath)
-        return jsonify({
-            'prediction': predicted_class,
-            'confidence': confidence
-        })
-    return jsonify({'error': 'Invalid file format'}), 400
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    if not file:
+        raise HTTPException(status_code=400, detail="No file part")
+    if not allowed_file(file.filename):
+        raise HTTPException(status_code=400, detail="Invalid file format")
+    
+    # Save the uploaded file
+    filename = file.filename
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    with open(filepath, "wb") as buffer:
+        buffer.write(await file.read())
+    
+    # Predict
+    predicted_class, confidence = predict_image(filepath)
+    return {"prediction": predicted_class, "confidence": confidence}
 
 # Upload Data for Retraining
-@app.route('/upload', methods=['POST'])
-def upload_data():
-    if 'files[]' not in request.files:
-        return jsonify({'error': 'No files uploaded'}), 400
-    files = request.files.getlist('files[]')
+@app.post("/upload")
+async def upload_data(files: List[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    
     for file in files:
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-    return jsonify({'message': f'{len(files)} files uploaded successfully'})
+        if not allowed_file(file.filename):
+            continue
+        filename = file.filename
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        with open(filepath, "wb") as buffer:
+            buffer.write(await file.read())
+    
+    return {"message": f"{len(files)} files uploaded successfully"}
 
 # Trigger Retraining with Metrics
-@app.route('/retrain', methods=['POST'])
-def retrain():
+@app.post("/retrain")
+async def retrain():
     try:
         metrics = retrain_model(model, UPLOAD_FOLDER)
         model.save(MODEL_PATH)
-        return jsonify({
-            'message': 'Model retrained successfully',
-            'metrics': metrics
-        })
+        return {"message": "Model retrained successfully", "metrics": metrics}
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Visualizations
-@app.route('/visualize', methods=['GET'])
-def visualize():
+@app.get("/visualize")
+async def visualize():
     # Placeholder data (replace with actual dataset analysis)
     sample_data = np.random.rand(100, len(class_names))
     predictions = np.argmax(sample_data, axis=1)
@@ -143,13 +151,15 @@ def visualize():
     health_img = base64.b64encode(buf.getvalue()).decode('utf-8')
     plt.close()
 
-    return jsonify({
-        'class_distribution': class_dist_img,
-        'confidence_scores': confidence_img,
-        'health_status': health_img
-    })
+    return {
+        "class_distribution": class_dist_img,
+        "confidence_scores": confidence_img,
+        "health_status": health_img
+    }
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER)
-    app.run(host='0.0.0.0', port=5000)
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))  # Use Render's PORT or default to 8000
+    uvicorn.run(app, host="0.0.0.0", port=port)
