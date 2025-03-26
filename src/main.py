@@ -13,6 +13,7 @@ import tensorflow as tf
 import uvicorn
 from datetime import datetime
 import logging
+import shutil
 
 # ================== INITIAL SETUP ================== #
 # Disable GPU and suppress TensorFlow logs
@@ -34,13 +35,20 @@ sys.path.append(os.path.join(current_dir, '..'))
 # ================== CONFIGURATION ================== #
 UPLOAD_FOLDER = os.path.join(current_dir, "uploaded_data")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-MODEL_PATH = os.path.join(current_dir, "models", "Model1.keras")
-PICKLE_PATH = os.path.join(current_dir, "models", "Model1.pkl")
+MODEL_DIR = os.path.join(current_dir, "models")
+MODEL_PATH = os.path.join(MODEL_DIR, "Model1.keras")
+PICKLE_PATH = os.path.join(MODEL_DIR, "Model1.pkl")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(os.path.join(current_dir, "models"), exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Log directory structure for debugging
+logger.info("Current directory: %s", current_dir)
+logger.info("Directory contents:")
+for root, dirs, files in os.walk(current_dir):
+    logger.info("%s has files: %s and dirs: %s", root, files, dirs)
 
 app = FastAPI(title="Plant Disease Classifier API",
              description="API for classifying plant diseases from leaf images",
@@ -77,8 +85,25 @@ try:
     from src.model import load_model, retrain_model, load_class_indices
     from src.prediction import predict_image
     
-    logger.info("Loading model...")
+    logger.info("Attempting to load model from: %s", MODEL_PATH)
+    
+    # Verify model files exist with better error reporting
+    if not os.path.exists(MODEL_PATH):
+        available_files = "\n".join(os.listdir(MODEL_DIR)) if os.path.exists(MODEL_DIR) else "Directory does not exist"
+        raise FileNotFoundError(
+            f"Model file not found at {MODEL_PATH}\n"
+            f"Available files in models directory:\n{available_files}"
+        )
+    
+    if not os.path.exists(PICKLE_PATH):
+        raise FileNotFoundError(f"Class indices file not found at {PICKLE_PATH}")
+
+    logger.info("Model files found, proceeding with loading...")
+    
+    # Load with progress indication
+    logger.info("Loading Keras model...")
     model = load_model(MODEL_PATH)
+    logger.info("Loading class indices...")
     class_indices = load_class_indices(PICKLE_PATH)
     
     # Fallback if class indices loading fails
@@ -86,10 +111,28 @@ try:
         logger.warning("Class indices not loaded properly, creating default mapping")
         class_indices = {v: k for k, v in enumerate(CLASS_NAMES)}
     
-    logger.info(f"Model loaded successfully with {len(class_indices)} classes")
+    logger.info("Model loaded successfully with %d classes", len(class_indices))
+    
+    # Test model prediction
+    logger.info("Running test prediction to verify model...")
+    test_input = np.zeros((1, 224, 224, 3))  # Adjust shape to your model's expected input
+    prediction = model.predict(test_input)
+    logger.info("Test prediction successful, output shape: %s", prediction.shape)
+    
 except Exception as e:
-    logger.error(f"Failed to load model: {str(e)}")
-    raise RuntimeError(f"Model loading failed: {str(e)}")
+    logger.error("MODEL LOADING FAILED!", exc_info=True)
+    logger.error("Current working directory: %s", os.getcwd())
+    logger.error("Directory contents: %s", os.listdir('.'))
+    if os.path.exists('src'):
+        logger.error("src directory contents: %s", os.listdir('src'))
+    if os.path.exists('models'):
+        logger.error("models directory contents: %s", os.listdir('models'))
+    
+    raise RuntimeError(
+        f"Model initialization failed: {str(e)}\n"
+        f"Current directory: {os.getcwd()}\n"
+        f"Looking for model at: {MODEL_PATH}"
+    )
 
 # ================== HELPER FUNCTIONS ================== #
 def allowed_file(filename: str) -> bool:
@@ -102,6 +145,8 @@ async def save_upload_file(file: UploadFile, destination: str) -> None:
                 buffer.write(chunk)
     except Exception as e:
         logger.error(f"Error saving file {file.filename}: {str(e)}")
+        if os.path.exists(destination):
+            os.remove(destination)
         raise
 
 # ================== API ENDPOINTS ================== #
@@ -110,6 +155,8 @@ async def root():
     return {
         "message": "Welcome to the Plant Disease Classifier API",
         "status": "operational",
+        "model_status": "loaded" if model else "not loaded",
+        "class_count": len(CLASS_NAMES),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -121,6 +168,8 @@ async def predict(file: UploadFile = File(...)):
     - **file**: Image file (JPG/PNG) up to 10MB
     """
     try:
+        start_time = datetime.now()
+        
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -148,12 +197,15 @@ async def predict(file: UploadFile = File(...)):
             )
         
         # Make prediction
+        logger.info("Starting prediction for file: %s", safe_filename)
         predicted_class, confidence = predict_image(filepath, model, class_indices)
+        logger.info("Prediction completed in %s", datetime.now() - start_time)
         
         return {
             "filename": safe_filename,
             "prediction": predicted_class,
             "confidence": float(confidence),
+            "processing_time": str(datetime.now() - start_time),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -161,7 +213,10 @@ async def predict(file: UploadFile = File(...)):
         raise
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error during prediction")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error during prediction: {str(e)}"
+        )
 
 @app.post("/upload", tags=["Training"])
 async def upload_data(files: List[UploadFile] = File(...)):
@@ -172,21 +227,31 @@ async def upload_data(files: List[UploadFile] = File(...)):
     """
     saved_files = []
     errors = []
+    start_time = datetime.now()
     
     for file in files:
         try:
-            if allowed_file(file.filename):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
-                filepath = os.path.join(UPLOAD_FOLDER, safe_filename)
+            if not file.filename:
+                errors.append("Empty filename")
+                continue
                 
-                await save_upload_file(file, filepath)
+            if not allowed_file(file.filename):
+                errors.append(f"Invalid file type: {file.filename}")
+                continue
                 
-                if os.path.getsize(filepath) > MAX_FILE_SIZE:
-                    os.remove(filepath)
-                    errors.append(f"File {file.filename} too large")
-                else:
-                    saved_files.append(safe_filename)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
+            filepath = os.path.join(UPLOAD_FOLDER, safe_filename)
+            
+            await save_upload_file(file, filepath)
+            
+            file_size = os.path.getsize(filepath)
+            if file_size > MAX_FILE_SIZE:
+                os.remove(filepath)
+                errors.append(f"File {file.filename} too large ({file_size//1024}KB)")
+            else:
+                saved_files.append(safe_filename)
+                
         except Exception as e:
             errors.append(f"Failed to process {file.filename}: {str(e)}")
     
@@ -194,7 +259,8 @@ async def upload_data(files: List[UploadFile] = File(...)):
         "success": len(saved_files),
         "failed": len(errors),
         "saved_files": saved_files,
-        "errors": errors
+        "errors": errors,
+        "processing_time": str(datetime.now() - start_time)
     }
 
 @app.post("/retrain", tags=["Training"])
@@ -203,21 +269,37 @@ async def retrain():
     Retrain model with uploaded data
     """
     try:
+        start_time = datetime.now()
         logger.info("Starting model retraining...")
+        
+        if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
+            raise HTTPException(
+                status_code=400,
+                detail="No training data available. Upload images first."
+            )
+        
         metrics = retrain_model(model, UPLOAD_FOLDER)
         
         # Save the updated model
+        logger.info("Saving retrained model...")
+        backup_path = os.path.join(MODEL_DIR, f"Model1_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.keras")
+        shutil.copyfile(MODEL_PATH, backup_path)
         model.save(MODEL_PATH)
-        logger.info("Model retrained and saved successfully")
         
+        logger.info("Model retrained and saved successfully")
         return {
             "status": "success",
             "metrics": metrics,
+            "backup_path": backup_path,
+            "processing_time": str(datetime.now() - start_time),
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Retraining failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Retraining failed: {str(e)}"
+        )
 
 @app.get("/visualize", tags=["Analytics"])
 async def visualize():
@@ -225,6 +307,8 @@ async def visualize():
     Generate visualization plots for model analytics
     """
     try:
+        start_time = datetime.now()
+        
         # Sample data - replace with actual model statistics
         sample_data = np.random.rand(100, len(CLASS_NAMES))
         predictions = np.argmax(sample_data, axis=1)
@@ -256,11 +340,15 @@ async def visualize():
         return {
             "status": "success",
             "plots": plots,
+            "processing_time": str(datetime.now() - start_time),
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Visualization error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Visualization generation failed: {str(e)}"
+        )
 
 # ================== HEALTH CHECK ================== #
 @app.get("/health", tags=["Monitoring"])
@@ -269,29 +357,69 @@ async def health_check():
     Service health check endpoint
     """
     try:
-        # Simple model check
-        test_input = np.zeros((1, 224, 224, 3))  # Adjust based on your model input shape
-        model.predict(test_input)
+        start_time = datetime.now()
+        
+        # Check model
+        test_input = np.zeros((1, 224, 224, 3))
+        prediction = model.predict(test_input)
+        
+        # Check upload directory
+        upload_dir_ok = os.path.exists(UPLOAD_FOLDER)
         
         return {
             "status": "healthy",
             "model_ready": True,
+            "model_output_shape": str(prediction.shape),
+            "upload_dir_accessible": upload_dir_ok,
+            "response_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(
             status_code=503,
-            detail="Service unavailable: model not functioning properly"
+            detail=f"Service unavailable: {str(e)}"
         )
+
+# ================== DEBUG ENDPOINTS ================== #
+@app.get("/debug/files", tags=["Debug"])
+async def debug_files():
+    """Endpoint to check file structure"""
+    def list_files(path):
+        if not os.path.exists(path):
+            return f"Path does not exist: {path}"
+        return {
+            "path": path,
+            "files": os.listdir(path)
+        }
+    
+    return {
+        "current_dir": list_files('.'),
+        "src_dir": list_files('src'),
+        "models_dir": list_files('models'),
+        "upload_dir": list_files(UPLOAD_FOLDER),
+        "abs_paths": {
+            "model": MODEL_PATH,
+            "pickle": PICKLE_PATH,
+            "exists": {
+                "model": os.path.exists(MODEL_PATH),
+                "pickle": os.path.exists(PICKLE_PATH)
+            }
+        }
+    }
 
 # ================== SERVER STARTUP ================== #
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
+    logger.info("Starting server on port %d", port)
+    logger.info("Current working directory: %s", os.getcwd())
+    logger.info("Environment variables: %s", {k: v for k, v in os.environ.items() if 'PYTHON' in k or 'PORT' in k})
+    
     uvicorn.run(
-        app,
+        "main:app",
         host="0.0.0.0",
         port=port,
         log_level="info",
-        timeout_keep_alive=300
+        timeout_keep_alive=300,
+        reload=False
     )
