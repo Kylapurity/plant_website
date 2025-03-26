@@ -14,6 +14,7 @@ import uvicorn
 from datetime import datetime
 import logging
 import shutil
+import pickle
 
 # ================== INITIAL SETUP ================== #
 # Disable GPU and suppress TensorFlow logs
@@ -36,7 +37,6 @@ sys.path.append(os.path.join(current_dir, '..'))
 UPLOAD_FOLDER = os.path.join(current_dir, "uploaded_data")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 MODEL_DIR = os.path.join(current_dir, "models")
-MODEL_PATH = os.path.join(MODEL_DIR, "Model1.keras")
 PICKLE_PATH = os.path.join(MODEL_DIR, "Model1.pkl")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
@@ -51,8 +51,8 @@ for root, dirs, files in os.walk(current_dir):
     logger.info("%s has files: %s and dirs: %s", root, files, dirs)
 
 app = FastAPI(title="Plant Disease Classifier API",
-             description="API for classifying plant diseases from leaf images",
-             version="1.0.0")
+              description="API for classifying plant diseases from leaf images",
+              version="1.0.0")
 
 # ================== CORS CONFIGURATION ================== #
 app.add_middleware(
@@ -82,40 +82,30 @@ CLASS_NAMES = [
 # ================== MODEL LOADING ================== #
 try:
     from src.preprocessing import preprocess_image, preprocess_dataset
-    from src.model import load_model, retrain_model, load_class_indices
+    from src.model import load_model, retrain_model
     from src.prediction import predict_image
     
-    logger.info("Attempting to load model from: %s", MODEL_PATH)
+    logger.info("Attempting to load model from: %s", PICKLE_PATH)
     
-    # Verify model files exist with better error reporting
-    if not os.path.exists(MODEL_PATH):
+    # Verify model file exists with better error reporting
+    if not os.path.exists(PICKLE_PATH):
         available_files = "\n".join(os.listdir(MODEL_DIR)) if os.path.exists(MODEL_DIR) else "Directory does not exist"
         raise FileNotFoundError(
-            f"Model file not found at {MODEL_PATH}\n"
+            f"Model file not found at {PICKLE_PATH}\n"
             f"Available files in models directory:\n{available_files}"
         )
-    
-    if not os.path.exists(PICKLE_PATH):
-        raise FileNotFoundError(f"Class indices file not found at {PICKLE_PATH}")
 
-    logger.info("Model files found, proceeding with loading...")
+    logger.info("Model file found, proceeding with loading...")
     
     # Load with progress indication
-    logger.info("Loading Keras model...")
-    model = load_model(MODEL_PATH)
-    logger.info("Loading class indices...")
-    class_indices = load_class_indices(PICKLE_PATH)
+    logger.info("Loading model from pickle file...")
+    model = load_model(PICKLE_PATH)
     
-    # Fallback if class indices loading fails
-    if not isinstance(class_indices, dict):
-        logger.warning("Class indices not loaded properly, creating default mapping")
-        class_indices = {v: k for k, v in enumerate(CLASS_NAMES)}
-    
-    logger.info("Model loaded successfully with %d classes", len(class_indices))
+    logger.info("Model loaded successfully with %d classes", len(CLASS_NAMES))
     
     # Test model prediction
     logger.info("Running test prediction to verify model...")
-    test_input = np.zeros((1, 224, 224, 3))  # Adjust shape to your model's expected input
+    test_input = np.zeros((1, 128, 128, 3))  # Match the input shape expected by your model (IMG_SIZE = (128, 128))
     prediction = model.predict(test_input)
     logger.info("Test prediction successful, output shape: %s", prediction.shape)
     
@@ -131,7 +121,7 @@ except Exception as e:
     raise RuntimeError(
         f"Model initialization failed: {str(e)}\n"
         f"Current directory: {os.getcwd()}\n"
-        f"Looking for model at: {MODEL_PATH}"
+        f"Looking for model at: {PICKLE_PATH}"
     )
 
 # ================== HELPER FUNCTIONS ================== #
@@ -198,7 +188,7 @@ async def predict(file: UploadFile = File(...)):
         
         # Make prediction
         logger.info("Starting prediction for file: %s", safe_filename)
-        predicted_class, confidence = predict_image(filepath, model, class_indices)
+        predicted_class, confidence = predict_image(filepath, model, CLASS_NAMES)
         logger.info("Prediction completed in %s", datetime.now() - start_time)
         
         return {
@@ -280,11 +270,12 @@ async def retrain():
         
         metrics = retrain_model(model, UPLOAD_FOLDER)
         
-        # Save the updated model
+        # Save the updated model to Model1.pkl
         logger.info("Saving retrained model...")
-        backup_path = os.path.join(MODEL_DIR, f"Model1_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.keras")
-        shutil.copyfile(MODEL_PATH, backup_path)
-        model.save(MODEL_PATH)
+        backup_path = os.path.join(MODEL_DIR, f"Model1_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl")
+        shutil.copyfile(PICKLE_PATH, backup_path)
+        with open(PICKLE_PATH, "wb") as f:
+            pickle.dump(model, f)
         
         logger.info("Model retrained and saved successfully")
         return {
@@ -360,7 +351,7 @@ async def health_check():
         start_time = datetime.now()
         
         # Check model
-        test_input = np.zeros((1, 224, 224, 3))
+        test_input = np.zeros((1, 128, 128, 3))
         prediction = model.predict(test_input)
         
         # Check upload directory
@@ -399,10 +390,8 @@ async def debug_files():
         "models_dir": list_files('models'),
         "upload_dir": list_files(UPLOAD_FOLDER),
         "abs_paths": {
-            "model": MODEL_PATH,
             "pickle": PICKLE_PATH,
             "exists": {
-                "model": os.path.exists(MODEL_PATH),
                 "pickle": os.path.exists(PICKLE_PATH)
             }
         }
