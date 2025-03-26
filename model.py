@@ -7,7 +7,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.metrics import confusion_matrix, f1_score
 import numpy as np
 import pickle
-from src.preprocessing import get_data_generators
+from preprocessing import get_data_generators
 
 def create_model(num_classes):
     model = Sequential([

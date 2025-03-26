@@ -5,8 +5,8 @@ import os
 import shutil
 import zipfile
 import logging
-from src.prediction import load_model, preprocess_image, predict, load_class_indices
-from src.model import retrain_model
+from prediction import load_model, preprocess_image, predict, load_class_indices
+from model import retrain_model
 app = FastAPI(
     title="Plant Disease API",
     description="API for plant disease classification and retraining.",
