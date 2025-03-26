@@ -54,7 +54,13 @@ class_names = [
 model = load_model(MODEL_PATH)
 class_indices = load_class_indices(PICKLE_PATH)
 
+# Debug: Verify the types
+print(f"Type of model: {type(model)}")
+print(f"Type of class_indices: {type(class_indices)}")
+
 # Validate that class_indices match class_names
+if not isinstance(class_indices, dict):
+    raise ValueError(f"Expected class_indices to be a dict, got {type(class_indices)}")
 if list(class_indices.keys()) != class_names:
     raise ValueError("Class names in pickle file do not match defined class_names")
 
