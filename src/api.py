@@ -1,6 +1,8 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import uvicorn
+from dotenv import load_dotenv
 import shutil
 import zipfile
 import logging
@@ -48,8 +50,8 @@ UPLOAD_FOLDER = "uploaded_data"
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-MODEL_PATH = "Model2.keras"
-PICKLE_PATH = "Model2.pkl"
+MODEL_PATH = "../models/Model1.keras"
+PICKLE_PATH = "../models/Model1.pkl"
 
 # Load model and class indices at startup
 try:
@@ -162,3 +164,9 @@ async def retrain(file: UploadFile = File(...)):
             os.remove(zip_path)
         if os.path.exists(extract_path):
             shutil.rmtree(extract_path)
+# Get the port from the environment variable (Render sets this)
+port = int(os.getenv("PORT", 8000))
+
+if __name__ == "__main__":
+    # Run the FastAPI app defined in api.py
+    uvicorn.run("api:app", host="0.0.0.0", port=port)

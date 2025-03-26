@@ -26,8 +26,8 @@ class_names = [
 ]
 
 # Constants
-MODEL_PATH = "Model2.keras"
-PICKLE_PATH = "Model2.pkl"
+MODEL_PATH = "../models/Model1.keras"
+PICKLE_PATH = "../models/Model1.pkl"
 
 def create_model(num_classes):
     """
