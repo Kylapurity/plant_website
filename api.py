@@ -1,4 +1,8 @@
 # src/api.py
+"""
+FastAPI application for the plant disease classification project.
+"""
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -7,6 +11,7 @@ import zipfile
 import logging
 from prediction import load_model, preprocess_image, predict, load_class_indices
 from model import retrain_model
+
 app = FastAPI(
     title="Plant Disease API",
     description="API for plant disease classification and retraining.",
