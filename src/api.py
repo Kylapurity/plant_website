@@ -1,5 +1,10 @@
 import os
+import sys
 import numpy as np
+
+# Add the parent directory of 'src' to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from flask import Flask, request, jsonify, render_template
 from werkzeug.utils import secure_filename
 from src.preprocessing import preprocess_image, preprocess_dataset
