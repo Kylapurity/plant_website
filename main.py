@@ -36,7 +36,7 @@ sys.path.append(os.path.join(current_dir, '..'))
 UPLOAD_FOLDER = os.path.join(current_dir, "uploaded_data")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 MODEL_DIR = os.path.join(current_dir, "models")
-KERAS_PATH = os.path.join(MODEL_DIR, "Model1.keras")
+KERAS_PATH = os.path.join(MODEL_DIR, "Model.keras")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 # Ensure directories exist
