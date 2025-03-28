@@ -5,7 +5,8 @@ import io
 import json
 import warnings
 from datetime import datetime
-from typing import List
+from typing import List, Union
+from datetime import timedelta
 
 import numpy as np
 import tensorflow as tf
@@ -13,16 +14,18 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tensorflow.keras.preprocessing import image
 from sklearn.metrics import classification_report, confusion_matrix
-
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from dotenv import load_dotenv
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
 
 # Load environment variables
 load_dotenv()
@@ -46,26 +49,65 @@ MODEL_DIR = "models"
 KERAS_PATH = os.path.join(MODEL_DIR, "plant_disease_model.keras")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'zip'}
 
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")  # Change this in production
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(VISUALIZATION_DIR, exist_ok=True)
 
+# ================== AUTHENTICATION SETUP ================== #
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Pydantic models for request/response
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+
+    class Config:
+        orm_mode = True
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Union[str, None] = None
+
 # ================== DATABASE MODELS ================== #
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    predictions = relationship("Prediction", back_populates="user")
+    retrainings = relationship("Retraining", back_populates="user")
+
 class Prediction(Base):
     __tablename__ = "predictions"
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     predicted_disease = Column(String(100), nullable=False)
     confidence = Column(Float, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="predictions")
 
 class Retraining(Base):
     __tablename__ = "retrainings"
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     num_classes = Column(Integer, nullable=False)
     training_accuracy = Column(Float, nullable=True)
     validation_accuracy = Column(Float, nullable=True)
     class_metrics = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="retrainings")
 
 Base.metadata.create_all(bind=engine)
 
@@ -158,6 +200,41 @@ def get_db():
     finally:
         db.close()
 
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: int = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + timedelta(minutes=expires_delta)
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = db.query(User).filter(User.username == token_data.username).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
 # API Endpoints
 @app.get("/", tags=["Root"])
 async def root():
@@ -169,8 +246,34 @@ async def root():
         "timestamp": datetime.now().isoformat()
     }
 
+@app.post("/signup", response_model=UserOut, tags=["Authentication"])
+async def signup(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    hashed_password = get_password_hash(user.password)
+    new_user = User(username=user.username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.post("/login", response_model=Token, tags=["Authentication"])
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": user.username}, expires_delta=ACCESS_TOKEN_EXPIRE_MINUTES)
+    return {"access_token": access_token, "token_type": "bearer"}
+
 @app.post("/predict", response_model=dict, tags=["Prediction"])
-async def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def predict(file: UploadFile = File(...), 
+                 current_user: User = Depends(get_current_user), 
+                 db: Session = Depends(get_db)):
     try:
         start_time = datetime.now()
         
@@ -191,6 +294,7 @@ async def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
         predicted_class = CLASS_NAMES[predicted_index]
         
         prediction = Prediction(
+            user_id=current_user.id,
             predicted_disease=predicted_class,
             confidence=float(confidence)
         )
@@ -211,6 +315,7 @@ async def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
 async def retrain(files: List[UploadFile] = File(...),
                  learning_rate: float = 0.0001,
                  epochs: int = 10,
+                 current_user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     global model, CLASS_NAMES
     
@@ -264,13 +369,12 @@ async def retrain(files: List[UploadFile] = File(...),
             except Exception:
                 continue
         
-        # Get all valid classes from the new data directory
         class_counts = {}
         for class_dir in os.listdir(new_data_dir):
             class_path = os.path.join(new_data_dir, class_dir)
             if os.path.isdir(class_path):
                 image_count = len([f for f in os.listdir(class_path) if allowed_file(f)])
-                if image_count >= 2:  # Require at least 2 images per class
+                if image_count >= 2:
                     class_counts[class_dir] = image_count
                 else:
                     shutil.rmtree(class_path)
@@ -278,11 +382,9 @@ async def retrain(files: List[UploadFile] = File(...),
         if not class_counts:
             raise HTTPException(status_code=400, detail="No valid classes with sufficient data found")
         
-        # Use only the classes present in the new data for training
         target_names = list(class_counts.keys())
-        use_validation = all(count >= 4 for count in class_counts.values())  # Require 4+ images for validation
+        use_validation = all(count >= 4 for count in class_counts.values())
         
-        # Data generators
         if use_validation:
             data_generator = tf.keras.preprocessing.image.ImageDataGenerator(
                 rescale=1./255,
@@ -325,16 +427,13 @@ async def retrain(files: List[UploadFile] = File(...),
             )
             validation_generator = None
         
-        # Save and reload model to avoid issues
         temp_model_path = os.path.join(MODEL_DIR, "temp_model.keras")
         model.save(temp_model_path)
         working_model = tf.keras.models.load_model(temp_model_path)
         
-        # Adjust model output layer to match the number of classes in the generator
         num_classes = len(train_generator.class_indices)
         if working_model.output_shape[-1] != num_classes:
-            # Rebuild the model with the correct output layer
-            base_model = tf.keras.Sequential(working_model.layers[:-1])  # Exclude the last layer
+            base_model = tf.keras.Sequential(working_model.layers[:-1])
             base_model.add(tf.keras.layers.Dense(num_classes, activation='softmax'))
             working_model = base_model
         
@@ -380,19 +479,18 @@ async def retrain(files: List[UploadFile] = File(...),
                 steps_per_epoch=max(1, len(train_generator))
             )
         
-        # Evaluate the model
         if use_validation:
             validation_generator.reset()
             y_pred = working_model.predict(validation_generator)
             y_pred_classes = np.argmax(y_pred, axis=1)
             y_true = validation_generator.classes
-            target_names = list(validation_generator.class_indices.keys())  # Use generator classes
+            target_names = list(validation_generator.class_indices.keys())
         else:
             train_generator.reset()
             y_pred = working_model.predict(train_generator)
             y_pred_classes = np.argmax(y_pred, axis=1)
             y_true = train_generator.classes
-            target_names = list(train_generator.class_indices.keys())  # Use generator classes
+            target_names = list(train_generator.class_indices.keys())
         
         class_report = classification_report(
             y_true,
@@ -406,7 +504,6 @@ async def retrain(files: List[UploadFile] = File(...),
         working_model.save(KERAS_PATH)
         model = tf.keras.models.load_model(KERAS_PATH)
         
-        # Update CLASS_NAMES to include only the classes used in training
         CLASS_NAMES = list(train_generator.class_indices.keys())
         with open(os.path.join(MODEL_DIR, "class_names.json"), "w") as f:
             json.dump(CLASS_NAMES, f)
@@ -425,6 +522,7 @@ async def retrain(files: List[UploadFile] = File(...),
         validation_accuracy = float(history.history['val_accuracy'][-1]) if use_validation and 'val_accuracy' in history.history else None
         
         retraining = Retraining(
+            user_id=current_user.id,
             num_classes=len(CLASS_NAMES),
             training_accuracy=training_accuracy,
             validation_accuracy=validation_accuracy,
@@ -464,15 +562,15 @@ async def retrain(files: List[UploadFile] = File(...),
             os.remove(temp_model_path)
 
 @app.get("/prediction_history", tags=["History"])
-async def get_prediction_history(db: Session = Depends(get_db)):
-    predictions = db.query(Prediction).order_by(Prediction.timestamp.desc()).all()
+async def get_prediction_history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    predictions = db.query(Prediction).filter(Prediction.user_id == current_user.id).order_by(Prediction.timestamp.desc()).all()
     return [{"id": p.id, "text": f"Predicted disease: {p.predicted_disease}", 
              "confidence": p.confidence, "date": p.timestamp.isoformat()}
             for p in predictions]
 
 @app.get("/retraining_history", tags=["History"])
-async def get_retraining_history(db: Session = Depends(get_db)):
-    retrainings = db.query(Retraining).order_by(Retraining.timestamp.desc()).all()
+async def get_retraining_history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    retrainings = db.query(Retraining).filter(Retraining.user_id == current_user.id).order_by(Retraining.timestamp.desc()).all()
     return [{"id": r.id, "text": f"Retrained model with {r.num_classes} classes", 
              "training_accuracy": r.training_accuracy, "validation_accuracy": r.validation_accuracy,
              "class_metrics": json.loads(r.class_metrics) if r.class_metrics else {},
