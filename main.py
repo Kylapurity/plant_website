@@ -1,7 +1,7 @@
 import os
 import sys
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import matplotlib.pyplot as plt
@@ -15,8 +15,7 @@ from datetime import datetime
 import logging
 import shutil
 
-# ================== INITIAL SETUP ================== #
-# Disable GPU and suppress TensorFlow logs
+# Setup: Disable GPU and suppress TensorFlow logs
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 tf.get_logger().setLevel('ERROR')
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, '..'))
 
-# ================== CONFIGURATION ================== #
+# Configuration
 UPLOAD_FOLDER = os.path.join(current_dir, "uploaded_data")
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 MODEL_DIR = os.path.join(current_dir, "models")
@@ -50,10 +49,10 @@ for root, dirs, files in os.walk(current_dir):
     logger.info("%s has files: %s and dirs: %s", root, files, dirs)
 
 app = FastAPI(title="Plant Disease Classifier API",
-             description="API for classifying plant diseases from leaf images",
-             version="1.0.0")
+              description="API for classifying plant diseases from leaf images",
+              version="1.0.0")
 
-# ================== CORS CONFIGURATION ================== #
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,7 +61,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================== CLASS NAMES ================== #
+# Class names
 CLASS_NAMES = [
     'Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy',
     'Blueberry___healthy', 'Cherry_(including_sour)___Powdery_mildew', 'Cherry_(including_sour)___healthy',
@@ -78,7 +77,7 @@ CLASS_NAMES = [
     'Tomato___Tomato_mosaic_virus', 'Tomato___healthy'
 ]
 
-# ================== MODEL LOADING ================== #
+# Model loading
 try:
     from src.preprocessing import preprocess_image, preprocess_dataset
     from src.model import load_model, retrain_model
@@ -86,7 +85,6 @@ try:
     
     logger.info("Attempting to load model from: %s", KERAS_PATH)
     
-    # Verify model files exist with better error reporting
     if not os.path.exists(KERAS_PATH):
         available_files = "\n".join(os.listdir(MODEL_DIR)) if os.path.exists(MODEL_DIR) else "Directory does not exist"
         raise FileNotFoundError(
@@ -95,16 +93,13 @@ try:
         )
     
     logger.info("Model file found, proceeding with loading...")
-    
-    # Load with progress indication
     logger.info("Loading Keras model...")
     model = load_model(KERAS_PATH)
     
     logger.info("Model loaded successfully with %d classes", len(CLASS_NAMES))
     
-    # Test model prediction
     logger.info("Running test prediction to verify model...")
-    test_input = np.zeros((1, 128, 128, 3))  # Match IMG_SIZE from preprocessing.py
+    test_input = np.zeros((1, 128, 128, 3))
     prediction = model.predict(test_input)
     logger.info("Test prediction successful, output shape: %s", prediction.shape)
     
@@ -123,14 +118,14 @@ except Exception as e:
         f"Looking for model at: {KERAS_PATH}"
     )
 
-# ================== HELPER FUNCTIONS ================== #
+# Helper functions
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 async def save_upload_file(file: UploadFile, destination: str) -> None:
     try:
         with open(destination, "wb") as buffer:
-            while chunk := await file.read(8192):  # 8KB chunks
+            while chunk := await file.read(8192):
                 buffer.write(chunk)
     except Exception as e:
         logger.error(f"Error saving file {file.filename}: {str(e)}")
@@ -138,9 +133,10 @@ async def save_upload_file(file: UploadFile, destination: str) -> None:
             os.remove(destination)
         raise
 
-# ================== API ENDPOINTS ================== #
+# API endpoints
 @app.get("/", tags=["Root"])
 async def root():
+    """Root endpoint"""
     return {
         "message": "Welcome to the Plant Disease Classifier API",
         "status": "operational",
@@ -151,41 +147,30 @@ async def root():
 
 @app.post("/predict", response_model=dict, tags=["Prediction"])
 async def predict(file: UploadFile = File(...)):
-    """
-    Classify plant disease from an uploaded image
+    """Classify plant disease from an image
     
-    - **file**: Image file (JPG/PNG) up to 10MB
+    - **file**: Image file (JPG/PNG, max 10MB)
     """
     try:
         start_time = datetime.now()
         
-        # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
         
         if not allowed_file(file.filename):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid file type. Only JPG, PNG are allowed"
-            )
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JPG, PNG are allowed")
         
-        # Save file with timestamp prefix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
         filepath = os.path.join(UPLOAD_FOLDER, safe_filename)
         
         await save_upload_file(file, filepath)
         
-        # Check file size
         file_size = os.path.getsize(filepath)
         if file_size > MAX_FILE_SIZE:
             os.remove(filepath)
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Max size is {MAX_FILE_SIZE//(1024*1024)}MB"
-            )
+            raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_FILE_SIZE//(1024*1024)}MB")
         
-        # Make prediction
         logger.info("Starting prediction for file: %s", safe_filename)
         predicted_class, confidence = predict_image(filepath, model, CLASS_NAMES)
         logger.info("Prediction completed in %s", datetime.now() - start_time)
@@ -202,15 +187,11 @@ async def predict(file: UploadFile = File(...)):
         raise
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error during prediction: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error during prediction: {str(e)}")
 
 @app.post("/upload", tags=["Training"])
 async def upload_data(files: List[UploadFile] = File(...)):
-    """
-    Upload multiple images for retraining
+    """Upload images for retraining
     
     - **files**: List of image files (JPG/PNG)
     """
@@ -253,21 +234,27 @@ async def upload_data(files: List[UploadFile] = File(...)):
     }
 
 @app.post("/retrain", tags=["Training"])
-async def retrain():
-    """
-    Retrain model with uploaded data
+async def retrain(epochs: int = 5, batch_size: int = 32):
+    """Retrain the model with uploaded images
+    
+    Returns metrics: accuracy, precision, recall, F1 score, and success status.
+    
+    - **epochs**: Number of training epochs (default: 5)
+    - **batch_size**: Batch size for training (default: 32)
     """
     try:
         start_time = datetime.now()
-        logger.info("Starting model retraining...")
+        logger.info("Starting model retraining with epochs=%d, batch_size=%d", epochs, batch_size)
         
         if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
-            raise HTTPException(
-                status_code=400,
-                detail="No training data available. Upload images first."
-            )
+            raise HTTPException(status_code=400, detail="No training data available. Upload images first.")
         
-        metrics = retrain_model(model, UPLOAD_FOLDER)
+        # Call retrain_model and get metrics
+        result = retrain_model(model, UPLOAD_FOLDER, epochs=epochs, batch_size=batch_size)
+        
+        # Check if retraining was successful
+        if not result.get('success', False):
+            raise HTTPException(status_code=500, detail=f"Retraining failed: {result.get('error', 'Unknown error')}")
         
         # Save the updated model
         logger.info("Saving retrained model...")
@@ -276,55 +263,72 @@ async def retrain():
         model.save(KERAS_PATH)
         
         logger.info("Model retrained and saved successfully")
-        return {
-            "status": "success",
-            "metrics": metrics,
+        
+        # Prepare response with metrics
+        response = {
+            "success": True,
+            "metrics": {
+                "val_loss": result['val_loss'],
+                "accuracy": result['val_accuracy'],
+                "precision": result['precision'],
+                "recall": result['recall'],
+                "f1_score": result['f1_score']
+            },
             "backup_path": backup_path,
             "processing_time": str(datetime.now() - start_time),
             "timestamp": datetime.now().isoformat()
         }
+        return response
+    
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Retraining failed: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Retraining failed: {str(e)}"
-        )
+        return {
+            "success": False,
+            "error": str(e),
+            "processing_time": str(datetime.now() - start_time),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.get("/visualize", tags=["Analytics"])
-async def visualize():
-    """
-    Generate visualization plots for model analytics
+async def visualize(
+    num_samples: int = Query(100, description="Number of samples to generate for visualization"),
+    plot_type: str = Query("both", description="Type of plot: 'class_distribution', 'confidence', or 'both'")
+):
+    """Generate plots for model analytics
+    
+    - **num_samples**: Number of samples to generate (default: 100)
+    - **plot_type**: Type of plot to generate (default: 'both')
     """
     try:
         start_time = datetime.now()
         
-        # Sample data - replace with actual model statistics
-        sample_data = np.random.rand(100, len(CLASS_NAMES))
+        sample_data = np.random.rand(num_samples, len(CLASS_NAMES))
         predictions = np.argmax(sample_data, axis=1)
         
-        # Generate plots
         plots = {}
         
-        # Class distribution plot
-        plt.figure(figsize=(12, 6))
-        sns.countplot(x=predictions)
-        plt.xticks(ticks=range(len(CLASS_NAMES)), labels=CLASS_NAMES, rotation=90)
-        plt.title('Class Distribution')
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        plots["class_distribution"] = base64.b64encode(buf.getvalue()).decode('utf-8')
-        plt.close()
+        if plot_type in ["class_distribution", "both"]:
+            plt.figure(figsize=(12, 6))
+            sns.countplot(x=predictions)
+            plt.xticks(ticks=range(len(CLASS_NAMES)), labels=CLASS_NAMES, rotation=90)
+            plt.title('Class Distribution')
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            buf.seek(0)
+            plots["class_distribution"] = base64.b64encode(buf.getvalue()).decode('utf-8')
+            plt.close()
         
-        # Confidence distribution plot
-        plt.figure(figsize=(10, 6))
-        sns.histplot(np.max(sample_data, axis=1), bins=20)
-        plt.title('Confidence Distribution')
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plots["confidence"] = base64.b64encode(buf.getvalue()).decode('utf-8')
-        plt.close()
+        if plot_type in ["confidence", "both"]:
+            plt.figure(figsize=(10, 6))
+            sns.histplot(np.max(sample_data, axis=1), bins=20)
+            plt.title('Confidence Distribution')
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            plots["confidence"] = base64.b64encode(buf.getvalue()).decode('utf-8')
+            plt.close()
         
         return {
             "status": "success",
@@ -334,25 +338,17 @@ async def visualize():
         }
     except Exception as e:
         logger.error(f"Visualization error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Visualization generation failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Visualization generation failed: {str(e)}")
 
-# ================== HEALTH CHECK ================== #
 @app.get("/health", tags=["Monitoring"])
 async def health_check():
-    """
-    Service health check endpoint
-    """
+    """Service health check"""
     try:
         start_time = datetime.now()
         
-        # Check model
         test_input = np.zeros((1, 128, 128, 3))
         prediction = model.predict(test_input)
         
-        # Check upload directory
         upload_dir_ok = os.path.exists(UPLOAD_FOLDER)
         
         return {
@@ -365,22 +361,15 @@ async def health_check():
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service unavailable: {str(e)}"
-        )
+        raise HTTPException(status_code=503, detail=f"Service unavailable: {str(e)}")
 
-# ================== DEBUG ENDPOINTS ================== #
 @app.get("/debug/files", tags=["Debug"])
 async def debug_files():
-    """Endpoint to check file structure"""
+    """Check file structure"""
     def list_files(path):
         if not os.path.exists(path):
             return f"Path does not exist: {path}"
-        return {
-            "path": path,
-            "files": os.listdir(path)
-        }
+        return {"path": path, "files": os.listdir(path)}
     
     return {
         "current_dir": list_files('.'),
@@ -389,13 +378,11 @@ async def debug_files():
         "upload_dir": list_files(UPLOAD_FOLDER),
         "abs_paths": {
             "keras": KERAS_PATH,
-            "exists": {
-                "keras": os.path.exists(KERAS_PATH)
-            }
+            "exists": {"keras": os.path.exists(KERAS_PATH)}
         }
     }
 
-# ================== SERVER STARTUP ================== #
+# Server startup
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     logger.info("Starting server on port %d", port)

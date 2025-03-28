@@ -200,10 +200,10 @@ const Dashboard = () => {
 
   const navTabs = [
     { id: 'trends', label: 'Disease Trends' },
-    { id: 'upload', label: 'Upload Image' },
+    { id: 'upload', label: 'Predict Diease' },
     { id: 'history', label: 'My History' },
     { id: 'retrain', label: 'Retrain Model' },
-    { id: 'visualizations', label: 'Data Insights' }
+    { id: 'visualizations', label: 'Visualizations' }
   ];
 
   return (
